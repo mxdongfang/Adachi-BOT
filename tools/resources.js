@@ -2,11 +2,11 @@ import fs from "fs";
 import lodash from "lodash";
 import fetch from "node-fetch";
 import path from "path";
-import sharp from "sharp";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import "#utils/config";
 import { mkdir } from "#utils/file";
+import { imgMeta, toWebp, toWebpFile, webpOpt, webpPos } from "#utils/sharp";
 
 ("use strict");
 
@@ -16,12 +16,6 @@ const m_DIR = Object.freeze({
   doc: mkdir(path.resolve(m_RESDIR, "info", "doc")),
   material: mkdir(path.resolve(m_RESDIR, "material")),
   weapon: mkdir(path.resolve(m_RESDIR, "weapon")),
-});
-const m_WEBP_OPTS = Object.freeze({
-  alphaQuality: 95, // 透明通道压缩质量 (max 100)
-  effort: 6, // 允许 sharp 使用的 CPU 资源量，偏重质量 6 (max 6)
-  quality: 90, // 压缩质量，偏重质量 90 (max 100)
-  smartSubsample: true, // 自动 YUV 4:2:0 子采样
 });
 const m_NICK_AMBR_TO_HONEY = Object.freeze({
   amber: "ambor",
@@ -56,6 +50,12 @@ const m_DAY_OF_WEEK_CN = Object.freeze({
 const m_UNKNOWN = Object.freeze("未知");
 const m_YE = Object.freeze("旅行者");
 const m_YE_EN = Object.freeze("Traveler");
+const m_KONG = Object.freeze("空");
+const m_KONG_EN = Object.freeze("Aether");
+const m_YING = Object.freeze("荧");
+const m_YING_EN = Object.freeze("Lumine");
+const m_ID_KONG = 10000005;
+const m_ID_YING = 10000007;
 const m_CAO = Object.freeze("草元素");
 const m_CAO_EN = Object.freeze("Grass");
 const m_AMBR_TOP = Object.freeze("https://api.ambr.top");
@@ -94,7 +94,56 @@ const mData = {
   },
 };
 
-async function pngUrlToWebpFile(url, file) {
+function isYe(name) {
+  return [m_YE, m_KONG, m_KONG_EN, m_YING, m_YING_EN].includes(name);
+}
+
+/***
+ * @param {string} id - id text from ambr.top API.
+ * @param {string} lang - "zh" or "en".
+ */
+function nameOfYe(id, lang = "zh") {
+  const langId = Object.freeze(["zh", "en"]).indexOf(lang) || 0;
+  const names = Object.freeze({
+    [m_ID_KONG]: [m_KONG, m_KONG_EN],
+    [m_ID_YING]: [m_YING, m_YING_EN],
+  });
+
+  id = String(id).match(/\d+/)[0];
+
+  for (const [i, n] of Object.entries(names)) {
+    if (i === id) {
+      return n[langId];
+    }
+  }
+}
+
+async function imgToWebpFile(
+  buffer,
+  file,
+  lossless = true,
+  width = { resize: webpOpt.NONE, size: 0 },
+  height = { resize: webpOpt.NONE, size: 0 },
+  position = webpPos.CENTER
+) {
+  process.stdout.write(`转换 ${file} ……\t`);
+
+  try {
+    await toWebpFile(buffer, file, lossless, width, height, position);
+    console.log("成功");
+  } catch (e) {
+    console.log("失败");
+  }
+}
+
+async function remoteImgToWebpFile(
+  url,
+  file,
+  lossless = true,
+  width = { resize: webpOpt.NONE, size: 0 },
+  height = { resize: webpOpt.NONE, size: 0 },
+  position = webpPos.CENTER
+) {
   let buffer;
 
   try {
@@ -103,14 +152,7 @@ async function pngUrlToWebpFile(url, file) {
     return;
   }
 
-  process.stdout.write(`转换 ${file} ...\t`);
-
-  try {
-    await sharp(buffer).webp(m_WEBP_OPTS).toFile(file);
-    console.log("成功");
-  } catch (e) {
-    console.log("失败");
-  }
+  return imgToWebpFile(buffer, file, lossless, width, height, position);
 }
 
 function tagColorToSpan(text) {
@@ -153,7 +195,7 @@ async function getBinBuffer(url, slient = false) {
   let error;
 
   if (false === slient) {
-    process.stdout.write(`拉取 ${url} ...\t`);
+    process.stdout.write(`拉取 ${url} ……\t`);
   }
 
   try {
@@ -180,7 +222,7 @@ async function getJsonObj(url, callback = (e) => e, slient = false) {
   let error;
 
   if (false === slient) {
-    process.stdout.write(`拉取 ${url} ...\t`);
+    process.stdout.write(`拉取 ${url} ……\t`);
   }
 
   try {
@@ -227,7 +269,12 @@ async function getData() {
         item.type = data.types[item.weaponType];
         item.icon = item.icon.match(/(?<=UI_AvatarIcon_)\w+/)[0];
 
-        if (!(m_YE === item.name && m_CAO !== item.element)) {
+        // 这里分荧妹和龙哥
+        if (m_YE === item.name) {
+          item.name = nameOfYe(item.id);
+        }
+
+        if (!(isYe(item.name) && m_CAO !== item.element)) {
           parsed.push(lodash.pick(item, ["birthday", "element", "icon", "id", "name", "rarity", "type"]));
         }
       }
@@ -240,7 +287,12 @@ async function getData() {
 
     for (const item of Object.values(data.items)) {
       if (Object.keys(data.types).includes(item.weaponType)) {
-        if (!(m_YE_EN === item.name && m_CAO_EN !== item.element)) {
+        // 这里分荧妹和龙哥
+        if (m_YE_EN === item.name) {
+          item.name = nameOfYe(item.id, "en");
+        }
+
+        if (!(isYe(item.name) && m_CAO_EN !== item.element)) {
           parsed.push(lodash.pick(item, ["id", "name"]));
         }
       }
@@ -328,9 +380,9 @@ async function parseCharInfo(name) {
       levelUpMaterials: [],
       mainStat: "",
       mainValue: "",
-      name: data.name,
-      passiveDesc: tagColorToSpan(m_YE !== data.name ? data.talent[6].description : ""),
-      passiveTitle: m_YE !== data.name ? data.talent[6].name : "",
+      name: isYe(data.name) ? nameOfYe(data.id) : data.name,
+      passiveDesc: tagColorToSpan(isYe(data.name) ? "" : data.talent[6].description),
+      passiveTitle: isYe(data.name) ? "" : data.talent[6].name,
       rarity: data.rank,
       talentMaterials: [],
       time: "",
@@ -416,22 +468,21 @@ async function parseCharInfo(name) {
     }
 
     // info.talentMaterials
-    const talentMaterialsIdx =
-      m_YE === data.name
-        ? [
-            // [number, rarity]
-            [3, 2],
-            [6, 3],
-            [6, 4],
-            [6, 5],
-          ]
-        : [
-            // [number, rarity]
-            [3, 2],
-            [21, 3],
-            [38, 4],
-            [6, 5],
-          ];
+    const talentMaterialsIdx = isYe(data.name)
+      ? [
+          // [number, rarity]
+          [3, 2],
+          [6, 3],
+          [6, 4],
+          [6, 5],
+        ]
+      : [
+          // [number, rarity]
+          [3, 2],
+          [21, 3],
+          [38, 4],
+          [6, 5],
+        ];
 
     for (let i = 0; i < talentMaterialsIdx.length; ++i) {
       for (const [id, num] of Object.entries(ascension.talent)) {
@@ -718,8 +769,75 @@ async function getMaterialImg(name) {
   const file = path.resolve(icondir, `${name}.webp`);
 
   if (!fs.existsSync(file)) {
-    await pngUrlToWebpFile(`${m_AMBR_TOP}/assets/UI/UI_ItemIcon_${getMaterialIdByName(name)}.png`, file);
+    await remoteImgToWebpFile(
+      `${m_AMBR_TOP}/assets/UI/UI_ItemIcon_${getMaterialIdByName(name)}.png`,
+      file,
+      false,
+      { resize: webpOpt.RESIZE, size: 256 },
+      { resize: webpOpt.RESIZE, size: 256 },
+      webpPos.CENTER
+    );
   }
+}
+
+async function getGachaImg(url, file, lossless = true, isChar = true, size = [320, 1024], position = webpPos.BOTTOM) {
+  function resize(from = [0, 0], to = [0, 0]) {
+    const [width, height] = from;
+    const [widthTo, heightTo] = to;
+
+    if (width !== widthTo || height !== heightTo) {
+      const [xs, ys] = [widthTo / width, heightTo / height];
+      let [x, y] = [widthTo, heightTo];
+
+      if (xs < ys) {
+        y = height * xs;
+      }
+
+      if (ys < xs) {
+        x = width * ys;
+      }
+
+      return [Math.floor(x), Math.floor(y)];
+    }
+
+    return to;
+  }
+
+  let gachaImg = await getBinBuffer(url);
+  const { width, height } = await imgMeta(gachaImg);
+  const [widthTo, heightTo] = size;
+  const [x, y] = resize([width, height], [widthTo, heightTo]);
+
+  if (true === isChar) {
+    if (width > widthTo || height > heightTo) {
+      gachaImg = await toWebp(
+        gachaImg,
+        true,
+        { resize: webpOpt.RESIZE, size: x },
+        { resize: webpOpt.RESIZE, size: y },
+        webpPos.CENTER
+      );
+    }
+  } else {
+    if (width !== widthTo || height !== heightTo) {
+      gachaImg = await toWebp(
+        gachaImg,
+        true,
+        { resize: webpOpt.CROP, size: widthTo },
+        { resize: webpOpt.CROP, size: heightTo },
+        webpPos.CENTER
+      );
+    }
+  }
+
+  await imgToWebpFile(
+    gachaImg,
+    file,
+    lossless,
+    { resize: webpOpt.CROP, size: widthTo },
+    { resize: webpOpt.CROP, size: heightTo },
+    position
+  );
 }
 
 async function getCharRes(info) {
@@ -733,7 +851,14 @@ async function getCharRes(info) {
   file = path.resolve(icondir, `${item.name}.webp`);
 
   if (!fs.existsSync(file)) {
-    await pngUrlToWebpFile(`${m_AMBR_TOP}/assets/UI/UI_AvatarIcon_${item.icon}.png`, file);
+    await remoteImgToWebpFile(
+      `${m_AMBR_TOP}/assets/UI/UI_AvatarIcon_${item.icon}.png`,
+      file,
+      false,
+      { resize: webpOpt.RESIZE, size: 256 },
+      { resize: webpOpt.RESIZE, size: 256 },
+      webpPos.CENTER
+    );
   }
 
   // namecard
@@ -746,7 +871,14 @@ async function getCharRes(info) {
       icon = "Yae1";
     }
 
-    await pngUrlToWebpFile(`${m_AMBR_TOP}/assets/UI/namecard/UI_NameCardPic_${icon}_P.png`, file);
+    await remoteImgToWebpFile(
+      `${m_AMBR_TOP}/assets/UI/namecard/UI_NameCardPic_${icon}_P.png`,
+      file,
+      false,
+      { resize: webpOpt.RESIZE, size: 840 },
+      { resize: webpOpt.RESIZE, size: 400 },
+      webpPos.CENTER
+    );
   }
 
   // material
@@ -768,16 +900,9 @@ async function getCharRes(info) {
   file = path.resolve(gachadir, `${item.name}.webp`);
 
   if (!fs.existsSync(file)) {
-    try {
-      const gachaId = String(info.id).slice(-3);
-      const gachaImg = await getBinBuffer(`${m_HONEY_HUNTER_WORLD_COM}/img/${nameEn}_${gachaId}_gacha_card.webp`);
+    const gachaId = String(info.id).slice(-3);
 
-      process.stdout.write(`写入 ${file} ... `);
-      await sharp(Buffer.from(gachaImg)).resize({ fit: sharp.fit.fill, width: 320, height: 1024 }).toFile(file);
-      console.log("成功");
-    } catch (e) {
-      console.log("失败");
-    }
+    await getGachaImg(`${m_HONEY_HUNTER_WORLD_COM}/img/${nameEn}_${gachaId}_gacha_card.webp`, file, false);
   }
 }
 
@@ -791,7 +916,14 @@ async function getWeaponRes(info) {
   file = path.resolve(icondir, `${item.name}.webp`);
 
   if (!fs.existsSync(file)) {
-    await pngUrlToWebpFile(`${m_AMBR_TOP}/assets/UI/UI_EquipIcon_${item.icon}.png`, file);
+    await remoteImgToWebpFile(
+      `${m_AMBR_TOP}/assets/UI/UI_EquipIcon_${item.icon}.png`,
+      file,
+      false,
+      { resize: webpOpt.RESIZE, size: 256 },
+      { resize: webpOpt.RESIZE, size: 256 },
+      webpPos.CENTER
+    );
   }
 
   // material
@@ -805,23 +937,25 @@ async function getWeaponRes(info) {
   file = path.resolve(gachadir, `${item.name}.webp`);
 
   if (!fs.existsSync(file)) {
-    try {
-      const gachaImg = await getBinBuffer(
-        `${m_PROJECT_CELESTIA_COM}/static/images/UI_Gacha_EquipIcon_${item.icon}.webp`
-      );
+    const urls = [
+      `${m_PROJECT_CELESTIA_COM}/static/images/UI_Gacha_EquipIcon_${item.icon}.webp`,
+      `${m_HONEY_HUNTER_WORLD_COM}/img/i_n${item.id}_gacha_icon.webp`,
+    ];
+    const losslessIdx = 1;
+    let ok = false;
 
-      process.stdout.write(`写入 ${file} ... `);
-      const image = sharp(Buffer.from(gachaImg));
-      const { width, height } = await image.metadata();
-
-      if (width > 320) {
-        await image.extract({ left: (width - 320) / 2, top: 0, width: 320, height });
+    for (let i = 0; i < urls.length; ++i) {
+      try {
+        await getGachaImg(urls[i], file, i >= losslessIdx, false, [320, 1024], webpPos.CENTER);
+        ok = true;
+        break;
+      } catch (e) {
+        // do nothing
       }
+    }
 
-      await image.resize({ fit: sharp.fit.fill, width: 320, height: 1024 }).toFile(file);
-      console.log("成功");
-    } catch (e) {
-      console.log("失败");
+    if (!ok) {
+      throw Error(`Failed to get gacha image.`);
     }
   }
 }
@@ -863,7 +997,7 @@ function writeData(name, data = {}) {
     .options({
       name: {
         alias: "n",
-        type: "string",
+        type: "array",
         description: "名称",
         requiresArg: true,
         required: true,
@@ -878,6 +1012,7 @@ function writeData(name, data = {}) {
   }
 
   let errcode = 0;
+  const failedNames = [];
 
   for (const n of argv.name.filter((c) => "" !== c)) {
     try {
@@ -897,8 +1032,15 @@ function writeData(name, data = {}) {
       }
     } catch (e) {
       console.log(`为【${n}】生成描述文件失败，跳过。\n错误的详细信息见下。\n${e.stack}`);
+      failedNames.push(n);
       errcode = -1;
     }
+  }
+
+  if (failedNames.length > 0) {
+    console.error(`以下角色或武器生成资源文件失败。\n${failedNames.join(" ")}`);
+  } else {
+    console.log("已完成。");
   }
 
   return errcode;
